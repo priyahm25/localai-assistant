@@ -1,0 +1,41 @@
+{
+  "name": "localai-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "prestart": "node scripts/copy-pdf-worker.mjs",
+    "start": "expo start",
+    "export:web": "node scripts/copy-pdf-worker.mjs && expo export --platform web",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "check:expo": "expo-doctor",
+    "test:unit": "node --require ./tests/tsx-preload.cjs --import tsx --test tests/*.test.ts",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "expo": "~54.0.21",
+    "expo-ai-kit": "0.18.2",
+    "expo-build-properties": "~1.0.9",
+    "expo-dev-client": "~6.0.20",
+    "expo-document-picker": "~14.0.8",
+    "expo-file-system": "~19.0.17",
+    "expo-pdf-text-extract": "^1.1.0",
+    "expo-status-bar": "~3.0.8",
+    "expo-system-ui": "~6.0.9",
+    "fast-xml-parser": "^5.2.5",
+    "fflate": "^0.8.2",
+    "pdfjs-dist": "4.10.38",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/react": "~19.1.10",
+    "expo-doctor": "^1.17.11",
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.2"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+.pnpm-store/
+.expo/
+.gradle-user/
+dist/
+dist-web/
+dist-android-check/
+public/pdf.worker.min.mjs
+*.log
+# Keep the existing native Android project in EAS source archives.

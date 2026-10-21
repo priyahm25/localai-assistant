@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "LocalAI Assistant",
+    "slug": "localai-assistant",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "android": { "package": "com.localai.assistant" },
+    "plugins": [
+      ["expo-ai-kit", { "llm": true }],
+      ["expo-build-properties", { "android": { "minSdkVersion": 26 } }]
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+.pnpm-store/
+.expo/
+dist/
+dist-web/
+dist-android-check/
+public/pdf.worker.min.mjs
+android/
+ios/
+*.log
+
+# Local Gradle caches
+.gradle-user/
+.gradle/
+**/.gradle/
+
