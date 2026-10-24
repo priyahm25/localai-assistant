@@ -1,14 +1,17 @@
 
-const upstreamTransformer = require('@expo/metro-config/babel-transformer');
+const expoTransformer = require(
+  require.resolve('@expo/metro-config/build/babel-transformer', {
+    paths: [require.resolve('expo/package.json')],
+  })
+);
 
 module.exports = {
-  ...upstreamTransformer,
-
+  ...expoTransformer,
   transform({ src, filename, ...options }) {
     if (filename.toLowerCase().includes('pdfjs-dist')) {
       src = src.replace(/\bimport\.meta\.url\b/g, "''");
     }
 
-    return upstreamTransformer.transform({ src, filename, ...options });
+    return expoTransformer.transform({ src, filename, ...options });
   },
 };
