@@ -1,14 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chunkDocument, ensureDocumentText, parseDeadlineJson, rankRelevantChunks } from '../src/services/documentAnalysis';
+import {
+  assertAnalysisChunkBudget,
+  chunkDocument,
+  chunkDocumentForSummary,
+  createStreamingOutputInspector,
+  ensureDocumentText,
+  inspectAccumulatedOutput,
+  shouldActivateModel,
+  summaryInferenceCallCount,
+  stripModelThinking,
+  MAX_ANALYSIS_CHUNKS,
+  MAX_SINGLE_CALL_SUMMARY_CHARACTERS,
+} from '../src/services/documentAnalysis';
 
-test('analysis rejects empty and malformed input instead of reporting no deadline', () => {
+test('summary input rejects empty text and invalid chunk limits', () => {
   assert.throws(() => ensureDocumentText('   '), /no extracted text/i);
   assert.throws(() => ensureDocumentText(null as unknown as string), /no extracted text/i);
   assert.throws(() => chunkDocument('some text', 10), /chunk limit/i);
 });
 
-test('chunking stays bounded and preserves every character and explicit page location', () => {
+test('chunking preserves source content and explicit page locations', () => {
   const text = '[Page 3]\n' + 'A'.repeat(150) + '\n' + 'B'.repeat(150);
   const chunks = chunkDocument(text, 120);
   assert.ok(chunks.length >= 3);
@@ -23,28 +35,64 @@ test('chunking labels sections when page metadata is unavailable', () => {
   assert.ok(chunks.every((chunk) => /^section \d+$/.test(chunk.location)));
 });
 
-test('local lexical retrieval selects matching passages and returns none on no match', () => {
-  const chunks = chunkDocument('Payment is due by 15 June.\n\nThe venue is the north hall.');
-  assert.equal(rankRelevantChunks(chunks, 'When is payment due?')[0]?.text, 'Payment is due by 15 June.');
-  assert.deepEqual(rankRelevantChunks(chunks, 'What is the mascot?'), []);
+test('five-page documents retain every page through bounded summary chunks', () => {
+  const text = Array.from({ length: 5 }, (_, index) => `[Page ${index + 1}]\n${String.fromCharCode(65 + index).repeat(600)}`).join('\n');
+  const chunks = chunkDocumentForSummary(text);
+  assert.ok(chunks.length >= 5);
+  assert.ok(chunks.every((chunk) => chunk.text.length <= 700));
+  for (let index = 0; index < 5; index += 1) {
+    assert.ok(chunks.some((chunk) => chunk.text.includes(String.fromCharCode(65 + index).repeat(100))));
+    assert.ok(chunks.some((chunk) => chunk.location.includes(`page ${index + 1}`)));
+  }
+  assert.doesNotThrow(() => assertAnalysisChunkBudget(chunks));
+  assert.ok(summaryInferenceCallCount(chunks.length) > chunks.length);
 });
 
-test('deadline output accepts verbatim explicit evidence and attaches source location', () => {
-  const chunk = chunkDocument('Submit the signed form by 15 June 2027.', 100)[0];
-  const result = parseDeadlineJson('{"deadlines":[{"dateText":"15 June 2027","requirement":"Submit the signed form","evidence":"Submit the signed form by 15 June 2027.","kind":"explicit"}]}', chunk);
-  assert.equal(result[0].kind, 'explicit');
-  assert.equal(result[0].location, 'section 1');
-  assert.equal(result[0].evidence, 'Submit the signed form by 15 June 2027.');
+test('the full summary budget rejects an oversized document without skipping sections', () => {
+  const oversized = chunkDocument(Array.from({ length: MAX_ANALYSIS_CHUNKS + 1 }, () => 'B'.repeat(650)).join('\n\n'));
+  assert.equal(oversized.length, MAX_ANALYSIS_CHUNKS + 1);
+  assert.throws(() => assertAnalysisChunkBudget(oversized), /too large for complete on-device summarization.*no sections were skipped/i);
 });
 
-test('deadline output supports an empty result only as a valid analyzed-chunk response', () => {
-  assert.deepEqual(parseDeadlineJson('{"deadlines":[]}', chunkDocument('No date appears in this passage.')[0]), []);
+test('model activation is skipped only when the requested model is already active', () => {
+  assert.equal(shouldActivateModel('qwen3-0.6b', 'qwen3-0.6b'), false);
+  assert.equal(shouldActivateModel(undefined, 'qwen3-0.6b'), true);
+  assert.equal(shouldActivateModel('other-model', 'qwen3-0.6b'), true);
 });
 
-test('deadline validator rejects malformed JSON, missing fields, and invented evidence for retry', () => {
-  const chunk = chunkDocument('The application is due 10 July.')[0];
-  assert.throws(() => parseDeadlineJson('not json', chunk), /valid JSON.*Retry/i);
-  assert.throws(() => parseDeadlineJson('{"deadlines":[{"dateText":"10 July"}]}', chunk), /malformed deadline.*Retry/i);
-  assert.throws(() => parseDeadlineJson('{"deadlines":[{"dateText":"10 July","requirement":"Apply","evidence":"by 9 July","kind":"explicit"}]}', chunk), /does not match.*Retry/i);
-  assert.throws(() => parseDeadlineJson('{"deadlines":[{"dateText":"11 July","requirement":"Apply","evidence":"The application is due 10 July.","kind":"explicit"}]}', chunk), /marked a date explicit.*Retry/i);
+test('short page-marked text stays complete in one model input', () => {
+  const text = `[Page 1]\nHeading:\n${'A'.repeat(MAX_SINGLE_CALL_SUMMARY_CHARACTERS - 20)}`;
+  const chunks = chunkDocumentForSummary(text);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].text, text);
+  assert.equal(summaryInferenceCallCount(chunks.length), 1);
+});
+
+test('long summary inputs retain bounded chunks', () => {
+  const chunks = chunkDocumentForSummary('X'.repeat(MAX_SINGLE_CALL_SUMMARY_CHARACTERS + 1));
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => chunk.text.length <= 700));
+});
+
+test('short model output stays under the visible character limit', () => {
+  assert.deepEqual(inspectAccumulatedOutput('Hello.', 120), {
+    rawCharacters: 6, visibleCharacters: 6, excessive: false,
+  });
+});
+
+test('reasoning tags split across stream events are excluded from visible output count', () => {
+  const inspect = createStreamingOutputInspector(20);
+  const chunks = ['<thi', 'nk>private reasoning', ' more</think>Hel', 'lo.'];
+  let result = inspect('');
+  for (const chunk of chunks) result = inspect(chunk);
+  assert.deepEqual(stripModelThinking(chunks.join('')), { text: 'Hello.', reasoning: 'private reasoning more' });
+  assert.equal(result.visibleCharacters, 6);
+  assert.equal(result.excessive, false);
+});
+
+test('stream output guard bounds both visible summaries and raw reasoning', () => {
+  const visible = createStreamingOutputInspector(20);
+  assert.equal(visible('A'.repeat(21)).excessive, true);
+  const reasoning = createStreamingOutputInspector(20, 100);
+  assert.equal(reasoning(`<think>${'x'.repeat(101)}</think>`).excessive, true);
 });

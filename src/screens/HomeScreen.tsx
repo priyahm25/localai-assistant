@@ -6,6 +6,7 @@ import { selectDocument } from '../services/documentPicker';
 import { DocumentExtractionError, type ImportedDocument, type PickedDocument } from '../types/document';
 import { logExtractionFailure } from '../services/extractionDiagnostics';
 import { DocumentAssistant } from '../components/DocumentAssistant';
+import { logPerformance } from '../services/performanceDiagnostics';
 
 export function HomeScreen() {
   const [document, setDocument] = useState<ImportedDocument | null>(null);
@@ -13,17 +14,37 @@ export function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const chooseDocument = async () => {
+    let formatCode = 0;
     let pickedUri: string | undefined;
     let pickedDocument: PickedDocument | undefined;
     const previousDocument = document;
     setError(null);
     setBusy(true);
     try {
-      const picked = await selectDocument();
+      let picked: PickedDocument | null = null;
+      const pickerStartedAt = Date.now();
+      try {
+        picked = await selectDocument();
+      } finally {
+        logPerformance('document-picker', { durationMs: Date.now() - pickerStartedAt, success: Boolean(picked) });
+      }
       if (!picked) return;
       pickedDocument = picked;
       pickedUri = picked.uri;
-      const extractedText = await extractDocument(picked);
+      formatCode = picked.format === 'txt' ? 1 : picked.format === 'pdf' ? 2 : 3;
+      const extractionStartedAt = Date.now();
+      let extractedText: string;
+      let extractionSucceeded = false;
+      try {
+        extractedText = await extractDocument(picked);
+        extractionSucceeded = true;
+      } finally {
+        logPerformance('document-import', {
+          durationMs: Date.now() - extractionStartedAt,
+          formatCode,
+          success: extractionSucceeded,
+        });
+      }
       setDocument({ ...picked, extractedText });
       pickedUri = undefined;
       if (previousDocument) discardPickedFile(previousDocument.uri);
@@ -58,7 +79,7 @@ export function HomeScreen() {
         <View style={styles.header}>
           <Text style={styles.eyebrow}>PRIVATE BY DESIGN</Text>
           <Text style={styles.title}>LocalAI Assistant</Text>
-          <Text style={styles.subtitle}>Bring in a document to read its text on this device.</Text>
+          <Text style={styles.subtitle}>Select a document to summarize it on this device.</Text>
         </View>
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Your document</Text>
@@ -69,20 +90,16 @@ export function HomeScreen() {
           {document && <View style={styles.fileInfo}>
             <Text style={styles.filename}>{document.name}</Text>
             <Text style={styles.meta}>{document.format.toUpperCase()}{document.size != null ? ` · ${formatSize(document.size)}` : ''}</Text>
+            <ActionButton title="Clear document" onPress={clearDocument} secondary />
           </View>}
         </View>
-        {document ? <>
+        {document ?
           <DocumentAssistant key={document.uri} documentName={document.name} documentText={document.extractedText} />
-          <View style={[styles.card, styles.previewCard]}>
-            <Text style={styles.sectionTitle}>Extracted text</Text>
-            <Text selectable style={styles.preview}>{document.extractedText}</Text>
-            <View style={styles.clearButton}><ActionButton title="Clear document" onPress={clearDocument} secondary /></View>
-          </View>
-        </> : <View style={styles.empty}>
+        : <View style={styles.empty}>
           <Text style={styles.emptyTitle}>No document selected</Text>
-          <Text style={styles.emptyCopy}>Choose a file to see its extracted text here. Your document is not sent to a server.</Text>
+          <Text style={styles.emptyCopy}>Choose a PDF, TXT, or DOCX file to summarize it locally.</Text>
         </View>}
-        <Text style={styles.footer}>TXT, PDF, and DOCX text extraction stays on this device. Local model analysis requires a custom Android build; web remains available for import and preview.</Text>
+        <Text style={styles.footer}>TXT, PDF, and DOCX text extraction stays on this device. Local summarization requires the custom Android build.</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -109,9 +126,6 @@ const styles = StyleSheet.create({
   fileInfo: { borderTopWidth: 1, borderTopColor: '#E8EEEB', paddingTop: 12, gap: 4 },
   filename: { color: '#233A34', fontSize: 15, fontWeight: '700' },
   meta: { color: '#788781', fontSize: 12, letterSpacing: 0.5 },
-  previewCard: { gap: 12 },
-  preview: { color: '#35443F', fontSize: 15, lineHeight: 23 },
-  clearButton: { paddingTop: 4 },
   empty: { alignItems: 'center', paddingHorizontal: 20, paddingVertical: 23 },
   emptyTitle: { color: '#52655E', fontSize: 16, fontWeight: '700' },
   emptyCopy: { color: '#82908A', fontSize: 14, textAlign: 'center', lineHeight: 21, marginTop: 6 },

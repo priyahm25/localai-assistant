@@ -1,4 +1,13 @@
-import type { PickedDocument } from '../types/document';
+import { DocumentExtractionError, type ExtractionErrorCode, type PickedDocument } from '../types/document';
+
+const SAFE_STAGES = new Set([
+  'select-document', 'read-file-bytes', 'validate-zip-container', 'open-zip-container',
+  'locate-document-xml', 'validate-document-xml', 'parse-document-xml', 'parse-related-word-part',
+  'validate-extracted-text', 'check-native-module', 'extract-native-pdf-text',
+  'load-browser-pdf-extractor', 'read-file', 'validate-file', 'configure-pdfjs-worker',
+  'load-pdf', 'extract-page-text',
+]);
+const SAFE_ERROR_CODES = new Set<ExtractionErrorCode>(['unsupported', 'empty', 'scanned-pdf', 'corrupt', 'read']);
 
 export interface ExtractionDiagnosticDetails {
   stage: string;
@@ -7,6 +16,7 @@ export interface ExtractionDiagnosticDetails {
   /** null means this parser does not expose the bytes to JavaScript. */
   bytesObtained?: boolean | null;
   byteLength?: number | null;
+  durationMs?: number;
 }
 
 /** Logs technical failures only in development, without filenames, URIs, or document data. */
@@ -17,34 +27,21 @@ export function logExtractionFailure(
 ): void {
   if (!development) return;
   const error = details.error;
-  const name = error instanceof Error ? error.name : error && typeof error === 'object' && 'name' in error ? String(error.name) : typeof error;
-  const rawMessage = error instanceof Error ? error.message : String(error);
-  const rawStack = error instanceof Error ? error.stack ?? '' : '';
-  const privateValues = [picked?.uri, picked?.name].filter((value): value is string => Boolean(value));
-  const sanitize = (value: string, max: number) => {
-    let safe = value;
-    for (const privateValue of privateValues) safe = safe.split(privateValue).join('[private file reference]');
-    safe = safe
-      .replace(/data:[^\s,]+,[^\s]+/gi, '[data omitted]')
-      .replace(/(?:[a-z]:[\\/]|file:\/\/\/?)[^\s"'<>)}]+/gi, '[path omitted]')
-      .replace(/(?:\/(?:Users|home|private|tmp)\/)[^\s"'<>)}]+/g, '[path omitted]');
-    return safe.slice(0, max);
-  };
-  const extension = picked?.name.split('.').pop()?.toLowerCase() ?? 'unknown';
+  const errorCode = error instanceof DocumentExtractionError && SAFE_ERROR_CODES.has(error.code)
+    ? error.code
+    : error instanceof Error ? 'unexpected-error' : 'unknown-error';
+  const format = picked?.format === 'txt' || picked?.format === 'pdf' || picked?.format === 'docx'
+    ? picked.format
+    : 'unknown';
   const diagnostic = {
-    stage: details.stage,
-    operation: details.operation,
-    extension,
-    mimeType: picked?.mimeType ?? 'unknown',
-    uriAvailable: Boolean(picked?.uri),
-    fileHandleAvailable: Boolean(picked?.webFile),
+    stage: SAFE_STAGES.has(details.stage) ? details.stage : 'unknown-stage',
+    format,
+    errorCode,
     bytesObtained: details.bytesObtained ?? null,
     byteLength: details.byteLength ?? null,
-    errorName: name,
-    errorMessage: sanitize(rawMessage, 1200),
-    stack: sanitize(rawStack, 4000) || undefined,
+    durationMs: typeof details.durationMs === 'number' && Number.isFinite(details.durationMs) && details.durationMs >= 0
+      ? details.durationMs
+      : null,
   };
-  // Some browser/dev-console bridges collapse object arguments to the word
-  // "Object". Serialize only the already-sanitized fields for readable logs.
   console.warn('[LocalAI extraction diagnostic]', JSON.stringify(diagnostic));
 }

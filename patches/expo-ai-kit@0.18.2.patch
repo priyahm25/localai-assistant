@@ -1,3 +1,16 @@
+diff --git a/build/models.js b/build/models.js
+index 300c3680d53dd8d0cf90a5ee44f8f9983ce4a1eb..2c5ea5831bec47d8648fea179e41420fca3735b2 100644
+--- a/build/models.js
++++ b/build/models.js
+@@ -45,7 +45,7 @@ export const MODEL_REGISTRY = [
+         parameterCount: '0.6B',
+         quantization: 'mixed-int4',
+         downloadUrl: 'https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/qwen3_0_6b_mixed_int4.litertlm',
+-        sha256: 'b1baab462f6be49d70eada79d715c2c52cd9ece0cad00bddf6a2c097d23498e9',
++        sha256: '7900eb4e7362d88c58782c6f9999bb7a129e03544aa98b8f338ea0cc5d8c22c1',
+         sizeBytes: 497_664_000, // 475MB (exact, HF LFS)
+         // The int4 build ships a 2048-token KV. TODO: benchmark on device.
+         contextWindow: 2_048,
 diff --git a/src/models.ts b/src/models.ts
 index de0e7fe9238ca6208420940382098a9d75eb4c05..aafa73b469c7891ec1b5f64a89861e60feb5b6dc 100644
 --- a/src/models.ts

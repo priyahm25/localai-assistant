@@ -2,6 +2,7 @@ import type { PickedDocument } from '../types/document';
 import { extractDocx } from './docxExtractor';
 import { extractPdf } from './pdfExtractor';
 import { extractTextFile } from './textExtractor';
+import { logPerformance } from './performanceDiagnostics';
 import { File } from 'expo-file-system';
 import { Platform } from 'react-native';
 
@@ -15,9 +16,24 @@ export function discardPickedFile(uri: string): void {
 }
 
 export async function extractDocument(document: PickedDocument): Promise<string> {
-  switch (document.format) {
-    case 'txt': return extractTextFile(document);
-    case 'pdf': return extractPdf(document);
-    case 'docx': return extractDocx(document);
+  const startedAt = Date.now();
+  let resultLength = 0;
+  let success = false;
+  try {
+    let text: string;
+    switch (document.format) {
+      case 'txt': text = await extractTextFile(document); break;
+      case 'pdf': text = await extractPdf(document); break;
+      case 'docx': text = await extractDocx(document); break;
+    }
+    resultLength = text.length;
+    success = true;
+    return text;
+  } finally {
+    logPerformance(`text-extraction.${document.format}`, {
+      durationMs: Date.now() - startedAt,
+      outputCharacters: resultLength,
+      success,
+    });
   }
 }

@@ -1,23 +1,23 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { ActionButton } from './ActionButton';
 import {
-  answerDocumentQuestion,
   cancelInference,
   cancelModelDownload,
-  extractImportantPoints,
-  findDeadlines,
   getModelState,
   prepareModel,
   summarizeDocument,
+  unloadModel,
   type AiProgress,
 } from '../services/localAiService';
-import type { ValidatedDeadline } from '../services/documentAnalysis';
+import { DEFAULT_LOCAL_AI_MODEL, LOCAL_AI_MODELS, type LocalAiModelId } from '../services/localAiModels';
+import { logPerformance } from '../services/performanceDiagnostics';
+import { createAsyncSingleFlight } from '../services/asyncSingleFlight';
 
 interface Props { documentName: string; documentText: string }
-type Result = { title: string; text?: string; deadlines?: ValidatedDeadline[]; note?: string };
 
 export function DocumentAssistant({ documentName, documentText }: Props) {
+  const [selectedModel, setSelectedModel] = useState<LocalAiModelId>(DEFAULT_LOCAL_AI_MODEL);
   const [modelReady, setModelReady] = useState(false);
   const [modelInstalled, setModelInstalled] = useState(false);
   const [compatible, setCompatible] = useState(true);
@@ -25,109 +25,140 @@ export function DocumentAssistant({ documentName, documentText }: Props) {
   const [progress, setProgress] = useState('');
   const [downloadProgress, setDownloadProgress] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<Result | null>(null);
-  const [question, setQuestion] = useState('');
+  const [summary, setSummary] = useState<string | null>(null);
   const [retryAction, setRetryAction] = useState<(() => void) | null>(null);
+  const runFlight = useRef<ReturnType<typeof createAsyncSingleFlight<void>> | null>(null);
+  const summaryStartedAt = useRef<number | null>(null);
+  const busyRef = useRef(false);
+  if (runFlight.current === null) runFlight.current = createAsyncSingleFlight<void>();
+
+  useEffect(() => {
+    if (summary !== null && summaryStartedAt.current !== null) {
+      logPerformance('summary-tap-to-display', { durationMs: Date.now() - summaryStartedAt.current, success: true });
+      summaryStartedAt.current = null;
+    }
+  }, [summary]);
 
   const refresh = useCallback(async () => {
     if (Platform.OS !== 'android') return;
     try {
-      const state = await getModelState();
+      const state = await getModelState(selectedModel);
       setModelInstalled(state.installed);
       setModelReady(state.ready);
       setCompatible(state.compatible);
     } catch {
       setError('Local AI needs the custom Android development build. This feature is unavailable in Expo Go.');
     }
-  }, []);
+  }, [selectedModel]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => () => {
+    // Expo AI Kit documents unloadModel() as the way to release the active
+    // downloadable model. Keep it loaded while this document is in use or
+    // while native inference is still running.
+    if (!busyRef.current) void unloadModel(selectedModel);
+  }, [selectedModel]);
 
-  const prepare = async () => {
-    setRetryAction(() => () => { void prepare(); });
-    setError(null);
+  const runSummary = () => runFlight.current!.run(async () => {
+    const startedAt = Date.now();
+    summaryStartedAt.current = startedAt;
+    let succeeded = false;
+    let downloadStartedAt: number | undefined;
+    let loadStartedAt: number | undefined;
+    let preparationSucceeded = false;
+    const preparationStartedAt = Date.now();
+    setRetryAction(() => () => { void runSummary(); });
     setBusy(true);
-    setProgress('Preparing model…');
+    busyRef.current = true;
+    setError(null);
+    setSummary(null);
+    setProgress('Preparing the on-device model…');
+    setDownloadProgress(undefined);
     try {
       await prepareModel((message, value) => {
+        if (message.startsWith('Downloading') && downloadStartedAt === undefined) downloadStartedAt = Date.now();
+        if (message.startsWith('Loading') && loadStartedAt === undefined) {
+          if (downloadStartedAt !== undefined) {
+            logPerformance('model-download', { durationMs: Date.now() - downloadStartedAt, success: true });
+            downloadStartedAt = undefined;
+          }
+          loadStartedAt = Date.now();
+        }
+        if (message.includes('is ready on this device.') && loadStartedAt !== undefined) {
+          logPerformance('model-load', { durationMs: Date.now() - loadStartedAt, success: true });
+          loadStartedAt = undefined;
+        }
         setProgress(message);
         if (value !== undefined) setDownloadProgress(value);
-      });
+      }, selectedModel);
+      preparationSucceeded = true;
       setModelInstalled(true);
       setModelReady(true);
+      const result = await summarizeDocument(documentText, setProgress, selectedModel);
+      setSummary(result.text);
+      succeeded = true;
     } catch (reason) {
+      console.error('[local-ai:ui-summary-error]', {
+        errorName: reason instanceof Error ? reason.name : typeof reason,
+        errorCode: reason && typeof reason === 'object' && 'code' in reason && typeof reason.code === 'string' ? reason.code : undefined,
+      });
       setError(describeError(reason));
     } finally {
+      if (downloadStartedAt !== undefined) logPerformance('model-download', { durationMs: Date.now() - downloadStartedAt, success: false });
+      if (loadStartedAt !== undefined) logPerformance('model-load', { durationMs: Date.now() - loadStartedAt, success: false });
+      logPerformance('model-preparation', { durationMs: Date.now() - preparationStartedAt, success: preparationSucceeded });
+      logPerformance('summary-total', { durationMs: Date.now() - startedAt, success: succeeded });
+      if (!succeeded && summaryStartedAt.current !== null) {
+        logPerformance('summary-tap-to-display', { durationMs: Date.now() - summaryStartedAt.current, success: false });
+        summaryStartedAt.current = null;
+      }
       setBusy(false);
+      busyRef.current = false;
+      setProgress('');
       void refresh();
     }
-  };
+  });
 
-  const run = async (title: string, task: (onProgress: AiProgress) => Promise<{ text: string; complete: boolean; examinedChunks: number; totalChunks: number; deadlines?: ValidatedDeadline[] }>) => {
-    setRetryAction(() => () => { void run(title, task); });
-    setBusy(true);
+  const selectModel = (modelId: LocalAiModelId) => {
+    if (busy || modelId === selectedModel) return;
+    setSelectedModel(modelId);
+    setModelReady(false);
+    setModelInstalled(false);
+    setCompatible(true);
+    setDownloadProgress(undefined);
+    setSummary(null);
     setError(null);
-    setResult(null);
-    setProgress('Analyzing on this device…');
-    try {
-      const value = await task((message) => setProgress(message));
-      setResult({
-        title,
-        text: value.text,
-        deadlines: value.deadlines,
-        note: value.complete
-          ? `Reviewed ${value.examinedChunks} of ${value.totalChunks} text sections.`
-          : `Reviewed ${value.examinedChunks} relevant sections of ${value.totalChunks}; this is not a full-document review.`,
-      });
-    } catch (reason) {
-      setError(describeError(reason));
-    } finally {
-      setBusy(false);
-      setProgress('');
-    }
   };
 
   const onDevice = Platform.OS === 'android';
   const notAvailableMessage = Platform.OS === 'web'
-    ? 'Document import and preview work on web. Local model inference requires the Android native build.'
+    ? 'Document import and extraction work on web. Local summarization requires the Android native build.'
     : 'Install the custom Android development build to use local AI. Expo Go does not contain the model runtime.';
 
   return <View style={styles.card}>
-    <Text style={styles.heading}>Document assistant</Text>
-    <Text style={styles.privacy}>On-device analysis · document text and questions are not sent to an inference service.</Text>
+    <Text style={styles.heading}>Summarize document</Text>
+    <Text style={styles.privacy}>On-device only. Document text is not sent to an inference service.</Text>
     <Text style={styles.selected}>Selected: {documentName}</Text>
-    {onDevice && !modelReady && <View style={styles.stack}>
-      <Text style={styles.helper}>{modelInstalled ? 'Qwen3-0.6B is downloaded and needs loading.' : 'Download Qwen3-0.6B once (about 475 MB), then analyze offline.'}</Text>
+    {onDevice && <View style={styles.stack}>
+      <Text style={styles.helper}>Local model</Text>
+      <View style={styles.row}>
+        <ActionButton title="Qwen3 0.6B" secondary={selectedModel !== 'qwen3-0.6b'} onPress={() => selectModel('qwen3-0.6b')} disabled={busy} />
+        <ActionButton title="Gemma 3 1B" secondary={selectedModel !== 'gemma3-1b-it'} onPress={() => selectModel('gemma3-1b-it')} disabled={busy} />
+      </View>
+      <Text style={styles.helper}>{LOCAL_AI_MODELS[selectedModel].name} · {LOCAL_AI_MODELS[selectedModel].sizeLabel}. The selected model runs offline.</Text>
       {!compatible && <Text style={styles.error}>This device does not meet the model’s minimum memory requirement.</Text>}
-      <ActionButton title={busy ? 'Preparing model…' : modelInstalled ? 'Load local model' : 'Download and load model'} onPress={prepare} disabled={busy || !compatible} />
-      {busy && !modelReady && <ActionButton title="Cancel download" secondary onPress={() => { void cancelModelDownload(); setBusy(false); setProgress('Download cancelled.'); }} />}
     </View>}
     {!onDevice && <Text style={styles.helper}>{notAvailableMessage}</Text>}
-    {modelReady && <View style={styles.stack}>
-      <View style={styles.row}>
-        <ActionButton title="Summarize" onPress={() => void run('Summary', (cb) => summarizeDocument(documentText, cb))} disabled={busy} />
-        <ActionButton title="Important points" onPress={() => void run('Important points', (cb) => extractImportantPoints(documentText, cb))} disabled={busy} />
-      </View>
-      <ActionButton title="Find deadlines" secondary onPress={() => void run('Deadlines and submission requirements', async (cb) => {
-        const value = await findDeadlines(documentText, cb);
-        return { ...value, text: '', deadlines: value.deadlines };
-      })} disabled={busy} />
-      <TextInput value={question} onChangeText={setQuestion} placeholder="Ask about this document" placeholderTextColor="#82908A" style={styles.input} editable={!busy} multiline />
-      <ActionButton title="Ask question" onPress={() => void run('Answer', (cb) => answerDocumentQuestion(documentText, question, cb))} disabled={busy || !question.trim()} />
-    </View>}
+    <ActionButton title={busy ? 'Summarizing…' : 'Summarize'} onPress={runSummary} disabled={busy || !onDevice || !compatible} />
+    {onDevice && !modelReady && <Text style={styles.helper}>{modelInstalled ? 'The downloaded model will load when you summarize.' : 'The selected model downloads once and loads when you summarize.'}</Text>}
     {busy && <View style={styles.progress}><ActivityIndicator color="#174E45" /><Text style={styles.helper}>{progress}</Text></View>}
     {typeof downloadProgress === 'number' && !modelReady && <Text style={styles.helper}>Download progress: {Math.round(downloadProgress * 100)}%</Text>}
-    {busy && modelReady && <ActionButton title="Cancel analysis" secondary onPress={() => { void cancelInference(); setBusy(false); setProgress('Analysis cancelled.'); }} />}
-    {error && <View style={styles.stack}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><ActionButton title="Retry" secondary onPress={() => { setError(null); if (retryAction) retryAction(); else void refresh(); }} /></View>}
-    {result && <View style={styles.result}>
-      <Text style={styles.resultTitle}>{result.title}</Text>
-      {result.text ? <Text selectable style={styles.body}>{result.text}</Text> : null}
-      {result.deadlines?.length ? result.deadlines.map((item, index) => <View key={`${item.location}-${index}`} style={styles.deadline}>
-        <Text style={styles.body}>{item.dateText} · {item.requirement}</Text>
-        <Text style={styles.helper}>{item.kind === 'explicit' ? 'Explicitly stated' : 'Inferred'} · {item.location}</Text>
-        <Text selectable style={styles.evidence}>“{item.evidence}”</Text>
-      </View>) : result.deadlines ? <Text style={styles.body}>No deadline was found in the reviewed text.</Text> : null}
-      {result.note && <Text style={styles.helper}>{result.note}</Text>}
+    {busy && progress.toLowerCase().includes('downloading') && <ActionButton title="Cancel download" secondary onPress={() => { void cancelModelDownload(selectedModel); setProgress('Cancelling download…'); }} />}
+    {busy && !progress.toLowerCase().includes('downloading') && modelReady && <ActionButton title="Cancel summary" secondary onPress={() => { void cancelInference(); setProgress('Cancelling summary…'); }} />}
+    {error && <View style={styles.stack}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><ActionButton title="Retry summary" secondary onPress={() => { setError(null); if (retryAction) retryAction(); else void refresh(); }} /></View>}
+    {summary !== null && <View style={styles.result}>
+      <Text style={styles.resultTitle}>Summary</Text>
+      <Text selectable style={styles.body}>{summary}</Text>
     </View>}
   </View>;
 }
@@ -135,8 +166,8 @@ export function DocumentAssistant({ documentName, documentText }: Props) {
 function describeError(reason: unknown): string {
   const message = reason instanceof Error ? reason.message : String(reason);
   if (/Exponent|native module|ExpoAiKit|not available/i.test(message)) return 'Local AI needs the custom Android development build. Rebuild after installing the native AI package.';
-  if (/cancel/i.test(message)) return 'The operation was cancelled. You can retry when ready.';
-  return `${message} You can retry the action.`;
+  if (/cancel/i.test(message)) return 'The summary was cancelled. You can retry when ready.';
+  return `${message} You can retry the summary.`;
 }
 
 const styles = StyleSheet.create({
@@ -149,10 +180,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: 8 },
   progress: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   error: { color: '#A0312E', backgroundColor: '#FFF1F0', borderRadius: 10, padding: 11, lineHeight: 19 },
-  input: { borderWidth: 1, borderColor: '#DCE5E0', borderRadius: 10, padding: 11, minHeight: 46, color: '#263A34' },
   result: { borderTopWidth: 1, borderTopColor: '#E8EEEB', paddingTop: 12, gap: 9 },
   resultTitle: { color: '#20332F', fontWeight: '700', fontSize: 16 },
   body: { color: '#35443F', fontSize: 14, lineHeight: 21 },
-  deadline: { gap: 4, borderLeftWidth: 3, borderLeftColor: '#78A89A', paddingLeft: 10 },
-  evidence: { color: '#53635D', fontSize: 13, lineHeight: 19 },
 });

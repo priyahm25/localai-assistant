@@ -6,10 +6,29 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "android": { "package": "com.localai.assistant" },
+    "android": {
+      "package": "com.localai.assistant"
+    },
     "plugins": [
-      ["expo-ai-kit", { "llm": true }],
-      ["expo-build-properties", { "android": { "minSdkVersion": 26 } }]
-    ]
+      [
+        "expo-ai-kit",
+        {
+          "llm": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fd64daa5-fcc3-4b06-a52f-5cdc4a15547d"
+      }
+    }
   }
 }

@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   expo-ai-kit@0.18.2:
-    hash: ra76txfpz6ktnojegetmr5nptu
+    hash: 4cvqbtzpwwsoryez6xoibkxgu4
     path: patches/expo-ai-kit@0.18.2.patch
 
 importers:
@@ -18,7 +18,7 @@ importers:
         version: 54.0.37(@babel/core@7.29.7)(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3)
       expo-ai-kit:
         specifier: 0.18.2
-        version: 0.18.2(patch_hash=ra76txfpz6ktnojegetmr5nptu)(expo@54.0.37(@babel/core@7.29.7)(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3))(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+        version: 0.18.2(patch_hash=4cvqbtzpwwsoryez6xoibkxgu4)(expo@54.0.37(@babel/core@7.29.7)(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3))(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       expo-build-properties:
         specifier: ~1.0.9
         version: 1.0.10(expo@54.0.37(@babel/core@7.29.7)(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3))
@@ -4878,7 +4878,7 @@ snapshots:
 
   event-target-shim@5.0.1: {}
 
-  expo-ai-kit@0.18.2(patch_hash=ra76txfpz6ktnojegetmr5nptu)(expo@54.0.37(@babel/core@7.29.7)(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3))(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
+  expo-ai-kit@0.18.2(patch_hash=4cvqbtzpwwsoryez6xoibkxgu4)(expo@54.0.37(@babel/core@7.29.7)(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3))(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
     dependencies:
       expo: 54.0.37(@babel/core@7.29.7)(react-native@0.81.5(@babel/core@7.29.7)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)(typescript@5.9.3)
       react: 19.1.0

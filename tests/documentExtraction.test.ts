@@ -8,6 +8,7 @@ import { extractDocx } from '../src/services/docxExtractor';
 import { zipSync, strToU8 } from 'fflate';
 import { logExtractionFailure } from '../src/services/extractionDiagnostics';
 import { DocumentExtractionError } from '../src/types/document';
+import { logPerformance } from '../src/services/performanceDiagnostics';
 
 test('TXT: returns UTF-8 text from the local reader', async () => {
   const result = await extractTextFromUri('file:///cache/note.txt', 'text/plain', async () => 'Café — hello\nSecond line');
@@ -191,7 +192,7 @@ test('PDF.js: rejects malformed and empty PDF files with useful errors', async (
     (error: unknown) => error instanceof DocumentExtractionError && error.code === 'corrupt');
 });
 
-test('diagnostics: report stage and file metadata without exposing names, URIs, or document text', () => {
+test('diagnostics: report safe error categories and metadata without filenames or document text', () => {
   const originalWarn = console.warn;
   const captured: unknown[][] = [];
   console.warn = (...values: unknown[]) => { captured.push(values); };
@@ -208,14 +209,55 @@ test('diagnostics: report stage and file metadata without exposing names, URIs, 
   assert.equal(captured.length, 1);
   const payload = JSON.parse(String(captured[0][1])) as Record<string, unknown>;
   assert.equal(payload.stage, 'open-zip-container');
-  assert.equal(payload.errorName, 'Error');
-  assert.equal(payload.errorMessage, 'bad ZIP');
-  assert.equal(payload.extension, 'docx');
-  assert.equal(payload.uriAvailable, true);
-  assert.equal(payload.fileHandleAvailable, true);
+  assert.equal(payload.errorCode, 'unexpected-error');
+  assert.equal(payload.format, 'docx');
   assert.equal(payload.bytesObtained, true);
   assert.equal(payload.byteLength, 42);
+  assert.equal(payload.operation, undefined);
+  assert.equal(payload.errorMessage, undefined);
+  assert.equal(payload.stack, undefined);
   assert.equal(JSON.stringify(payload).includes('private-report.docx'), false);
   assert.equal(JSON.stringify(payload).includes('file:///private/report.docx'), false);
   assert.equal(JSON.stringify(payload).includes('private text'), false);
+});
+
+test('diagnostics omit a unique secret from both extraction error messages and stack traces', () => {
+  const originalWarn = console.warn;
+  const captured: unknown[][] = [];
+  console.warn = (...values: unknown[]) => { captured.push(values); };
+  const secret = 'FAKE_DOCUMENT_SECRET_92ad1e7';
+  const error = new Error(`parser failed near ${secret}`);
+  error.stack = `Error: ${secret}\n    at parser (private-document.xml:1:9)`;
+  try {
+    logExtractionFailure(
+      { name: 'private-report.docx', uri: 'file:///private/report.docx', format: 'docx', webFile: new Blob([secret]) },
+      { stage: 'parse-document-xml', operation: `parsing ${secret}`, error, bytesObtained: true, byteLength: 128 },
+      true,
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(captured.length, 1);
+  const payload = String(captured[0].join(' '));
+  assert.doesNotMatch(payload, new RegExp(secret));
+  assert.doesNotMatch(payload, /private-report\.docx|file:\/\/\/private\/report\.docx|private-document\.xml/);
+  assert.match(payload, /"errorCode":"unexpected-error"/);
+  assert.match(payload, /"stage":"parse-document-xml"/);
+});
+
+test('performance diagnostics log only numeric and boolean metrics in development', () => {
+  const originalInfo = console.info;
+  const captured: unknown[][] = [];
+  console.info = (...values: unknown[]) => { captured.push(values); };
+  try {
+    logPerformance('text-extraction.pdf', { durationMs: 24, outputCharacters: 812, success: true }, true);
+    logPerformance('text-extraction.txt', { durationMs: 3 }, false);
+  } finally {
+    console.info = originalInfo;
+  }
+  assert.equal(captured.length, 1);
+  const serialized = String(captured[0][1]);
+  assert.match(serialized, /"stage":"text-extraction.pdf"/);
+  assert.match(serialized, /"durationMs":24/);
+  assert.doesNotMatch(serialized, /filename|prompt|evidence|document text/i);
 });
